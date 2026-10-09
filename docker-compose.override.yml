@@ -1,0 +1,12 @@
+services:
+  api:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"
+
+  worker:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"
+
+  worker-beat:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"

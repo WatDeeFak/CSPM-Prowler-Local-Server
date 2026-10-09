@@ -860,6 +860,175 @@ Changing an AWS configuration is only the remediation step. A follow-up assessme
 
 ---
 
+## Troubleshooting
+
+During the setup of Prowler Local Server, several issues were encountered involving Docker configuration, AWS credentials, and IAM Role assumption. The following notes document the root causes and final resolutions.
+
+### 1. Docker Compose Configuration Error
+
+**Problem**
+
+Docker Compose returned a YAML configuration error when validating the custom override file.
+
+**Root Cause**
+
+The `docker-compose.override.yml` file contained incorrectly structured YAML, including indentation and mapping issues.
+
+**Resolution**
+
+Recreated the override file with the correct YAML structure and mounted the AWS configuration directory into the required Prowler services.
+
+The final configuration used:
+
+```yaml
+services:
+  api:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"
+
+  worker:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"
+
+  worker-beat:
+    volumes:
+      - "${USERPROFILE}/.aws:/home/prowler/.aws:ro"
+```
+
+**Validation**
+
+```powershell
+docker compose config
+```
+
+The command completed successfully, confirming that Docker Compose could validate the merged configuration.
+
+### 2. AWS Credentials Not Available in Docker
+
+**Problem**
+
+Prowler Local Server returned:
+
+```text
+AWSAssumeRoleError[1012]
+Unable to locate credentials
+```
+
+**Root Cause**
+
+The Prowler containers could not access the AWS CLI configuration and source credentials stored on the Windows host.
+
+**Resolution**
+
+Mounted the host's `.aws` directory into the `api`, `worker`, and `worker-beat` containers as a read-only volume.
+
+Configured the Local Server to use the source AWS CLI profile:
+
+```text
+AWS_PROFILE=default
+```
+
+**Validation**
+
+Verified that the required configuration and credentials files were accessible inside the containers without displaying their secret contents.
+
+The three services were checked individually:
+
+- `api`
+- `worker`
+- `worker-beat`
+
+### 3. AccessDenied During AssumeRole
+
+**Problem**
+
+AWS CLI returned an authorization error when attempting to assume the `ProwlerScan` role:
+
+```text
+AccessDenied
+is not authorized to perform sts:AssumeRole
+```
+
+**Root Cause**
+
+The IAM Role trust relationship did not allow the source IAM principal used by the AWS CLI to assume the role.
+
+**Resolution**
+
+Updated the CloudFormation stack's `IAMPrincipal` parameter to trust the intended source IAM principal rather than relying on the original default pattern.
+
+The existing `ProwlerScan` role was updated instead of creating another role.
+
+**Validation**
+
+Executed:
+
+```powershell
+aws sts get-caller-identity --profile prowler-local
+```
+
+The command successfully returned an assumed-role ARN for `ProwlerScan`, confirming that the role assumption worked from the Windows host.
+
+### 4. Repeated AssumeRole Attempt
+
+**Problem**
+
+Prowler Local Server returned an authorization error in which the caller was already an assumed `ProwlerScan` role but attempted to assume `ProwlerScan` again.
+
+**Root Cause**
+
+The Local Server was configured to use `prowler-local` as its `AWS_PROFILE`. That profile already performed role assumption, causing the application to use assumed-role credentials as its source identity.
+
+**Resolution**
+
+Changed the Local Server's environment configuration to:
+
+```text
+AWS_PROFILE=default
+```
+
+The `default` profile supplied the source credentials, while Prowler Local Server performed the role assumption using the IAM Role ARN and External ID configured in the AWS provider.
+
+The separate `prowler-local` profile was retained for validating role assumption through the AWS CLI.
+
+**Validation**
+
+Restarted the Docker services and retried the provider connection. Prowler Local Server successfully connected to the AWS account.
+
+### 5. Docker Engine Unavailable After Windows Shutdown
+
+**Problem**
+
+The Docker CLI could not connect to the Docker Desktop Linux engine after the laptop was shut down and restarted.
+
+**Root Cause**
+
+Docker Desktop and its Linux container engine were not running when the command was executed.
+
+**Resolution**
+
+Started Docker Desktop, waited for the engine to become available, and restarted the Prowler services from the project directory:
+
+```powershell
+docker compose up -d
+```
+
+**Validation**
+
+```powershell
+docker compose ps
+```
+
+Confirmed that the main Prowler services returned to their expected running or healthy states.
+
+### Key Troubleshooting Lessons
+
+- Docker containers must have access to the credential source required by their AWS authentication workflow.
+- IAM Role assumption depends on both a valid source identity and an appropriate trust relationship.
+- The source credential profile and the target assumed role serve different purposes.
+- Docker Compose override files must be validated before restarting services.
+- A Docker engine connection error does not necessarily indicate that the application or its persistent data is damaged.
+
 ## Project Conclusion
 
 This project was created to gain hands-on experience with the complete AWS CSPM lifecycle using Prowler Local Server.
